@@ -17,6 +17,9 @@ dependencies {
     api("org.java-websocket", "Java-WebSocket", Versions.javaWebsocketVersion)
     api("org.incendo", "cloud-core", Versions.cloudCore)
     api("org.bstats", "bstats-base", Versions.bstatsVersion)
+
+    testImplementation("org.junit.jupiter", "junit-jupiter", "5.10.2")
+    testRuntimeOnly("org.junit.platform", "junit-platform-launcher", "1.10.2")
 }
 
 // present on all platforms
@@ -26,6 +29,9 @@ provided("io.netty", "netty-codec", Versions.nettyVersion)
 relocate("org.bstats")
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
     templateSources {
         replaceToken("floodgateVersion", fullVersion())
         replaceToken("branch", branchName())

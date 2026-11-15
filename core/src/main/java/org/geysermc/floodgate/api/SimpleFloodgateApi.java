@@ -56,6 +56,11 @@ public class SimpleFloodgateApi implements FloodgateApi {
             CacheBuilder.newBuilder()
                     .expireAfterWrite(20, TimeUnit.SECONDS)
                     .build();
+    private final Map<UUID, FloodgatePlayer> linkedPlayers = new ConcurrentHashMap<>();
+    private final Cache<UUID, FloodgatePlayer> pendingRemoveLinked =
+            CacheBuilder.newBuilder()
+                    .expireAfterWrite(20, TimeUnit.SECONDS)
+                    .build();
 
     @Inject private PluginMessageManager pluginMessageManager;
     @Inject private FloodgateConfig config;
@@ -95,6 +100,25 @@ public class SimpleFloodgateApi implements FloodgateApi {
             return pendingRemove.getIfPresent(uuid);
         }
 
+        FloodgatePlayer linkedPlayer = linkedPlayers.get(uuid);
+        if (linkedPlayer != null) {
+            if (players.get(linkedPlayer.getJavaUniqueId()) == linkedPlayer) {
+                return linkedPlayer;
+            }
+            return scanPlayers(uuid);
+        }
+
+        FloodgatePlayer pendingPlayer = pendingRemoveLinked.getIfPresent(uuid);
+        if (pendingPlayer == null) {
+            return null;
+        }
+        if (pendingRemove.getIfPresent(pendingPlayer.getJavaUniqueId()) == pendingPlayer) {
+            return pendingPlayer;
+        }
+        return getPendingRemovePlayer(uuid);
+    }
+
+    private FloodgatePlayer scanPlayers(UUID uuid) {
         // make it possible to find player by Java id (linked players)
         for (FloodgatePlayer player : players.values()) {
             if (player.getCorrectUniqueId().equals(uuid)) {
@@ -103,6 +127,21 @@ public class SimpleFloodgateApi implements FloodgateApi {
         }
         // and don't forget the pending remove linked players
         return getPendingRemovePlayer(uuid);
+    }
+
+    private boolean isLinked(FloodgatePlayer player) {
+        return !isFloodgateId(player.getCorrectUniqueId());
+    }
+
+    private void unindex(FloodgatePlayer player) {
+        UUID correctUuid = player.getCorrectUniqueId();
+        if (!linkedPlayers.remove(correctUuid, player)) return;
+        for (FloodgatePlayer other : players.values()) {
+            if (other.getCorrectUniqueId().equals(correctUuid)) {
+                linkedPlayers.putIfAbsent(correctUuid, other);
+                return;
+            }
+        }
     }
 
     @Override
@@ -204,7 +243,10 @@ public class SimpleFloodgateApi implements FloodgateApi {
 
     public FloodgatePlayer addPlayer(FloodgatePlayer player) {
         // Bedrock players are always stored by their xuid
-        return players.put(player.getJavaUniqueId(), player);
+        FloodgatePlayer previous = players.put(player.getJavaUniqueId(), player);
+        if (previous != null && previous != player) unindex(previous);
+        if (isLinked(player)) linkedPlayers.put(player.getCorrectUniqueId(), player);
+        return previous;
     }
 
     /**
@@ -213,7 +255,10 @@ public class SimpleFloodgateApi implements FloodgateApi {
      */
     public boolean setPendingRemove(FloodgatePlayer player) {
         pendingRemove.put(player.getJavaUniqueId(), player);
-        return players.remove(player.getJavaUniqueId(), player);
+        if (isLinked(player)) pendingRemoveLinked.put(player.getCorrectUniqueId(), player);
+        if (!players.remove(player.getJavaUniqueId(), player)) return false;
+        unindex(player);
+        return true;
     }
 
     public void playerRemoved(UUID correctUuid) {
